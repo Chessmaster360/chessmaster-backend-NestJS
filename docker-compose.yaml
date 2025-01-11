@@ -8,21 +8,28 @@ services:
       MONGO_INITDB_DATABASE: chessmaster
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: admin321
-      MONGO_BIND_IP_ALL: "true"
+      MONGO_INITDB_USERNAME: chessmasterUser      # Usuario para chessmaster
+      MONGO_INITDB_PASSWORD: chessmasterPass      # Contraseña para chessmaster
     volumes:
       - mongodb_data:/data/db
+
 
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: chessmaster-backend
+    command: ["npm", "run", "start:dev"]  # Cambié esto para ejecutar el servidor
     ports:
       - "3000:3000"
     depends_on:
       - mongo
     environment:
-      MONGO_URI: mongodb://admin:admin321@mongo:27017/chessmaster?authSource=admin
+      MONGO_URI: mongodb://chessmasterUser:chessmasterPass@mongo:27017/chessmaster  # Usa el nuevo usuario y contraseña
+    volumes:
+      - .:/usr/src/app         # Monta tu código local en el contenedor
+      - /usr/src/app/node_modules # Evita conflictos de dependencias
+
 volumes:
   mongodb_data:
     driver: local
