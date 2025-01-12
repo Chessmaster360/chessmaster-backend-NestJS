@@ -7,7 +7,7 @@ import { UsersModule } from './users/users.module';
   imports: [
     ConfigModule.forRoot(), // Carga las variables de entorno
     MongooseModule.forRoot(process.env.MONGO_URI, {
-      authSource: 'chessmaster',  // Asegúrate de usar la base de datos correcta para la autenticación
+      dbName: 'chessmaster', // Nombre de la base de datos
     }),
     UsersModule, // Módulo de los servicios de ajedrez
   ],

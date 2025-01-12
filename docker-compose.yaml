@@ -6,10 +6,6 @@ services:
       - "27017:27017"
     environment:
       MONGO_INITDB_DATABASE: chessmaster
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: admin321
-      MONGO_INITDB_USERNAME: chessmasterUser      # Usuario para chessmaster
-      MONGO_INITDB_PASSWORD: chessmasterPass      # Contraseña para chessmaster
     volumes:
       - mongodb_data:/data/db
 
@@ -25,7 +21,7 @@ services:
     depends_on:
       - mongo
     environment:
-      MONGO_URI: mongodb://chessmasterUser:chessmasterPass@mongo:27017/chessmaster  # Usa el nuevo usuario y contraseña
+      MONGO_URI: mongodb://172.18.0.2:27017/chessmaster  # Usa el nuevo usuario y contraseña
     volumes:
       - .:/usr/src/app         # Monta tu código local en el contenedor
       - /usr/src/app/node_modules # Evita conflictos de dependencias

@@ -2,7 +2,7 @@
 FROM node:18-alpine
 
 # Establece el directorio de trabajo
-WORKDIR /app
+WORKDIR /usr/src/app
 
 # Copia el package.json e instala las dependencias
 COPY package*.json ./
@@ -18,4 +18,4 @@ RUN npm run build
 EXPOSE 3000
 
 # Comando para ejecutar la aplicación
-CMD ["npm", "run", "start:dev"]
+CMD ["npm", "start"]
