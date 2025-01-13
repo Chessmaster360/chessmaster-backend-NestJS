@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
+import { HttpModule } from '@nestjs/axios'; // Importa el HttpModule
 import { ChessService } from './chess.service';
 import { ChessController } from './chess.controller';
 
 @Module({
-  imports: [HttpService], // Para manejar peticiones HTTP a Chess.com
+  imports: [HttpModule], // Para manejar peticiones HTTP a Chess.com
   controllers: [ChessController],
   providers: [ChessService],
 })
