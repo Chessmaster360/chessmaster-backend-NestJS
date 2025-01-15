@@ -20,8 +20,6 @@ services:
       - "3000:3000"
     depends_on:
       - mongo
-    environment:
-      MONGO_URI: mongodb://172.18.0.2:27017/chessmaster  # Usa el nuevo usuario y contraseña
     volumes:
       - .:/usr/src/app         # Monta tu código local en el contenedor
       - /usr/src/app/node_modules # Evita conflictos de dependencias
