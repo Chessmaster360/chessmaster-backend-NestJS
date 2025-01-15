@@ -8,7 +8,10 @@ import { BotsModule } from './bots/bots.module';
 @Module({
   imports: [
     ConfigModule.forRoot(), // Carga las variables de entorno
-    MongooseModule.forRoot(process.env.MONGO_URI),
+    MongooseModule.forRoot(process.env.MONGO_URI, {
+      ssl: true, // Importante para Cosmos DB
+      retryWrites: false, // Cosmos DB no soporta "retryWrites"
+    }),
     UsersModule,
     ChessModule,
     BotsModule, // Módulo de los servicios de ajedrez
