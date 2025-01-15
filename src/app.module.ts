@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from './users/users.module';
 import { ChessModule } from './chess/chess.module';
+import { BotsModule } from './bots/bots.module';
 
 @Module({
   imports: [
@@ -11,7 +12,8 @@ import { ChessModule } from './chess/chess.module';
       dbName: 'chessmaster', // Nombre de la base de datos
     }),
     UsersModule,
-    ChessModule, // Módulo de los servicios de ajedrez
+    ChessModule,
+    BotsModule, // Módulo de los servicios de ajedrez
   ],
   controllers: [],
   providers: [],
