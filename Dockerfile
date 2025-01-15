@@ -19,5 +19,8 @@ RUN npm run build
 # Expone el puerto 3000
 EXPOSE 3000
 
+# Copia el archivo .env al contenedor
+COPY .env .env
+
 # Ejecuta el código compilado en modo producción
 CMD ["npm", "run", "start:prod"]

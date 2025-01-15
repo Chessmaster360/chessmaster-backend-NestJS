@@ -20,6 +20,9 @@ services:
       - "3000:3000"
     depends_on:
       - mongo
+    environment:
+      - MONGO_URI=${AZURE_COSMOS_CONNECTIONSTRING}
+    restart: always
     volumes:
       - .:/usr/src/app         # Monta tu código local en el contenedor
       - /usr/src/app/node_modules # Evita conflictos de dependencias
