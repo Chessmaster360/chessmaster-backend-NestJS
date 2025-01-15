@@ -8,7 +8,7 @@ import { BotsModule } from './bots/bots.module';
 @Module({
   imports: [
     ConfigModule.forRoot(), // Carga las variables de entorno
-    MongooseModule.forRoot(process.env.MONGO_URI, {
+    MongooseModule.forRoot(process.env.AZURE_COSMOS_CONNECTIONSTRING, {
       ssl: true, // Importante para Cosmos DB
       retryWrites: false, // Cosmos DB no soporta "retryWrites"
     }),
