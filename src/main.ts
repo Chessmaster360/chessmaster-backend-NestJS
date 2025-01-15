@@ -10,7 +10,7 @@ async function bootstrap() {
   // Configuración de CORS
   app.enableCors({
     origin: [
-      'http://localhost:5173', // Ambiente local
+      'http://localhost:5173',
       'https://chessmaster360.netlify.app', // URL de producción
     ], // Permitir múltiples orígenes
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // Métodos HTTP permitidos
