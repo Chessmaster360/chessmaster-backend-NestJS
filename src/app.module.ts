@@ -4,8 +4,6 @@ import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from './users/users.module';
 import { ChessModule } from './chess/chess.module';
 import { BotsModule } from './bots/bots.module';
-import { StockfishServiceService } from './stockfish-service/stockfish-service.service';
-import { AnalysisModule } from './analysis/analysis.module';
 
 @Module({
   imports: [
@@ -17,10 +15,9 @@ import { AnalysisModule } from './analysis/analysis.module';
     UsersModule,
     ChessModule,
     BotsModule,
-    AnalysisModule, // Módulo de los servicios de ajedrez
   ],
   controllers: [],
-  providers: [StockfishServiceService],
+  providers: [],
 })
 export class AppModule {}
 
