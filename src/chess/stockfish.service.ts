@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import * as fs from 'fs';
+import { Chess } from 'chess.js';
+
 
 @Injectable()
 export class StockfishService {
@@ -32,9 +35,17 @@ export class StockfishService {
     });
   }
 
+  private checkStockfishBinary(): boolean {
+    return fs.existsSync('./bin/stockfish');
+  }
+  
   private initializeStockfish(): ChildProcessWithoutNullStreams {
+    if (!this.checkStockfishBinary()) {
+      throw new Error('Stockfish binary not found');
+    }
     return spawn('./bin/stockfish');
   }
+  
 
   private sendCommandsToStockfish(stockfish: ChildProcessWithoutNullStreams, pgn: string, depth: number): void {
     stockfish.stdin.write('uci\n');
@@ -44,7 +55,9 @@ export class StockfishService {
   }
 
   private pgnToMoves(pgn: string): string {
-    return pgn.replace(/\[.*\]\s/g, '').replace(/\n/g, ' ').trim();
+    const chess = new Chess();
+    chess.loadPgn(pgn);
+    return chess.history().join(' ');
   }
 
   private processStockfishOutput(output: string): any {
@@ -70,6 +83,10 @@ export class StockfishService {
   private parseMoveAnalysis(line: string): any {
     const regex = /info depth (\d+) .* score (\w+) (-?\d+) .* pv (.+)/;
     const match = line.match(regex);
+    if (!match) {
+      console.warn('Unexpected Stockfish output:', line);
+      return null;
+    }  
     if (match) {
       const [, depth, scoreType, score, moves] = match;
       const classification = this.classifyMove(parseInt(score), scoreType);
