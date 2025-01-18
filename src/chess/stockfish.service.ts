@@ -33,7 +33,7 @@ export class StockfishService {
   }
 
   private initializeStockfish(): ChildProcessWithoutNullStreams {
-    return spawn('./stockfish');
+    return spawn('./bin/stockfish');
   }
 
   private sendCommandsToStockfish(stockfish: ChildProcessWithoutNullStreams, pgn: string, depth: number): void {
