@@ -13,6 +13,12 @@ RUN npm install
 # Copia el resto del código
 COPY . .
 
+# Copia el binario de Stockfish al contenedor
+COPY bin/stockfish /usr/src/app/bin/stockfish
+
+# Da permisos de ejecución al binario
+RUN chmod +x /usr/src/app/bin/stockfish
+
 # Compila el código fuente
 RUN npm run build
 

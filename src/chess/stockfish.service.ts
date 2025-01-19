@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import { Chess } from 'chess.js';
-import * as path from 'path';
+import { binaryPath } from 'config/paths'; // Ruta al ejecutable de Stockfish.
 
 
 @Injectable()
@@ -36,16 +36,15 @@ export class StockfishService {
     });
   }
 
-
   private checkStockfishBinary(): boolean {
-    return fs.existsSync(path.resolve(__dirname, '../../bin/stockfish'));
+    return fs.existsSync(binaryPath); // Usa el binaryPath de config/paths.
   }
 
   private initializeStockfish(): ChildProcessWithoutNullStreams {
     if (!this.checkStockfishBinary()) {
       throw new Error('Stockfish binary not found');
     }
-    return spawn(binaryPath);
+    return spawn(binaryPath); // Usa el binaryPath de config/paths.
   }
 
 
