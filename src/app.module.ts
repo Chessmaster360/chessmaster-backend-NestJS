@@ -3,7 +3,6 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule } from '@nestjs/config';
 import { UsersModule } from './users/users.module';
 import { ChessModule } from './chess/chess.module';
-import { BotsModule } from './bots/bots.module';
 
 @Module({
   imports: [
@@ -14,7 +13,6 @@ import { BotsModule } from './bots/bots.module';
     }),
     UsersModule,
     ChessModule,
-    BotsModule,
   ],
   controllers: [],
   providers: [],
