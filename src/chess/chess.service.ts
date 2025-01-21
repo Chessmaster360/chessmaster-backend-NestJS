@@ -2,17 +2,11 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { Chess } from 'chess.js'; // Usamos chess.js para manejar la lógica de ajedrez.
-import { Position, Classification } from '../interfaces/analysis.interfaces';
+import { Position, Classification, EvaluatedPosition, Report } from '../interfaces/analysis.interfaces';
 
 // Define los tipos de datos esperados en las respuestas
 interface ArchivesResponse {
   archives: string[];
-}
-
-export interface Report {
-  positions: EvaluatedPosition[];
-  classifications: string[];
-  accuracies: number[];
 }
 
 interface GamesResponse {
@@ -139,10 +133,43 @@ export class ChessService {
   }
 
   public formatAnalysisReport(evaluatedPositions: EvaluatedPosition[], accuracy: number): Report {
+    // Inicializar contadores para clasificaciones
+    const whiteClassifications: Record<Classification, number> = {
+      brilliant: 0, great: 0, best: 0, excellent: 0, good: 0,
+      inaccuracy: 0, mistake: 0, blunder: 0, book: 0, forced: 0
+    };
+    const blackClassifications: Record<Classification, number> = {
+      brilliant: 0, great: 0, best: 0, excellent: 0, good: 0,
+      inaccuracy: 0, mistake: 0, blunder: 0, book: 0, forced: 0
+    };
+
+    // Separar posiciones por color y contar clasificaciones
+    evaluatedPositions.forEach((pos, index) => {
+      const isWhite = index % 2 === 0;
+      if (isWhite) {
+        whiteClassifications[pos.classification]++;
+      } else {
+        blackClassifications[pos.classification]++;
+      }
+    });
+
+    // Calcular precisión por color
+    const whitePositions = evaluatedPositions.filter((_, i) => i % 2 === 0);
+    const blackPositions = evaluatedPositions.filter((_, i) => i % 2 === 1);
+
+    const whiteAccuracy = this.calculateAccuracy(whitePositions.map(pos => pos.classification));
+    const blackAccuracy = this.calculateAccuracy(blackPositions.map(pos => pos.classification));
+
     return {
       positions: evaluatedPositions,
-      classifications: evaluatedPositions.map((pos) => pos.classification),
-      accuracies: [accuracy],
+      accuracies: {
+        white: whiteAccuracy,
+        black: blackAccuracy
+      },
+      classifications: {
+        white: whiteClassifications,
+        black: blackClassifications
+      }
     };
   }
 }

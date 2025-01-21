@@ -203,17 +203,44 @@ export class EngineService implements OnModuleDestroy {
     return current.value - previous.value;
   }
 
-  /**
+   /**
    * Obtiene el mejor movimiento sugerido por el motor.
    * @param engineLines Las líneas de evaluación del motor.
-   * @returns El movimiento en notación SAN (si está disponible) o UCI.
+   * @returns Objeto con el movimiento en ambas notaciones UCI y SAN.
+   * @throws Error si no hay líneas evaluadas o falta la notación UCI.
    */
-  getSuggestedMove(engineLines: EngineLine[]): string {
+   getSuggestedMove(engineLines: EngineLine[]): { san: string; uci: string } {
     if (!engineLines || engineLines.length === 0) {
       throw new Error("No se encontraron líneas evaluadas por el motor.");
     }
 
-    const bestLine = engineLines[0]; // La mejor línea siempre es la primera.
-    return bestLine.moveSAN ?? bestLine.moveUCI; // Prefiere SAN, pero usa UCI si SAN no está disponible.
+    const bestLine = engineLines[0];
+    
+    if (!bestLine.moveUCI) {
+      throw new Error("No se encontró la notación UCI para el movimiento sugerido.");
+    }
+
+    // Si no tenemos SAN, convertimos UCI a SAN usando chess.js
+    const san = bestLine.moveSAN ?? this.convertUCItoSAN(bestLine.moveUCI);
+
+    return {
+      san,
+      uci: bestLine.moveUCI
+    };
+  }
+
+  /**
+   * Convierte un movimiento de notación UCI a SAN usando chess.js
+   * @param uci Movimiento en notación UCI
+   * @returns Movimiento en notación SAN
+   */
+  private convertUCItoSAN(uci: string): string {
+    const chess = new Chess();
+    const move = chess.move({
+      from: uci.substring(0, 2),
+      to: uci.substring(2, 4),
+      promotion: uci[4]
+    });
+    return move?.san ?? uci; // Si la conversión falla, devolvemos UCI como fallback
   }
 }

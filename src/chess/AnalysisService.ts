@@ -55,7 +55,6 @@ export class AnalysisService {
 
     for (const [index, position] of positions.entries()) {
       try {
-        // Analizar la posición actual con Stockfish.
         const engineLines = await this.engineService.evaluatePosition(position.fen, depth);
 
         if (!engineLines || engineLines.length === 0) {
@@ -63,10 +62,7 @@ export class AnalysisService {
           continue;
         }
 
-        // Obtener la evaluación principal (mejor línea).
         const bestLine = engineLines[0];
-
-        // Calcular la diferencia de evaluación (delta).
         const evaluationDelta = index > 0 
           ? this.engineService.calculateEvaluationDelta(
               bestLine.evaluation,
@@ -74,21 +70,14 @@ export class AnalysisService {
             )
           : 0;
 
-        // Clasificar el movimiento según el delta.
         const classification = this.chessService.classifyMove(evaluationDelta);
+        const suggestedMove = this.engineService.getSuggestedMove(engineLines);
 
-        // Sugerir el mejor movimiento desde el motor.
-        const suggestedMove = {
-          san: this.engineService.getSuggestedMove(engineLines),
-          uci: this.engineService.getSuggestedMove(engineLines),
-        };
-
-        // Construir y almacenar la posición evaluada.
         evaluatedPositions.push({
           ...position,
           evaluation: bestLine.evaluation,
           classification,
-          suggestedMove,
+          suggestedMove
         });
       } catch (error) {
         console.error(`Error al analizar la posición ${position.fen}:`, error.message);
