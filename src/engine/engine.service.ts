@@ -1,5 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Chess, validateFen } from 'chess.js';
+import { Worker } from 'worker_threads';
+import { join } from 'path';
 
 interface Evaluation {
   type: 'cp' | 'mate';
@@ -23,16 +25,16 @@ export class EngineService implements OnModuleDestroy {
   }
 
   /**
-   * Inicializa un Web Worker con la configuración adecuada.
-   * @returns Una instancia del Web Worker.
+   * Inicializa un Worker con el motor de Stockfish.
+   * @returns Una instancia de Worker.
    */
   private initWorker(): Worker {
-    const worker = new Worker(
-      typeof WebAssembly === 'object'
-        ? '/stockfish/stockfish-16.1-single.js'
-        : '/stockfish/stockfish-16.1.js'
-    );
+    const workerPath = join(__dirname, 'stockfish/stockfish-16.1-single.js'); // Ruta del binario Stockfish
+    const worker = new Worker(workerPath, {
+      execArgv: [], // Configuración para evitar argumentos adicionales en Node.js
+    });
 
+    // Configuración inicial del motor
     worker.postMessage('uci');
     worker.postMessage('setoption name MultiPV value 2');
 
@@ -67,8 +69,8 @@ export class EngineService implements OnModuleDestroy {
     const lines: EngineLine[] = [];
 
     return new Promise((resolve, reject) => {
-      const onMessage = (event: MessageEvent) => {
-        const message: string = event.data;
+      const onMessage = (event: { data: string }) => {
+        const message = event.data;
         messages.unshift(message);
 
         if (verbose) console.log('[Stockfish]:', message);
@@ -121,14 +123,14 @@ export class EngineService implements OnModuleDestroy {
         reject(new Error('Stockfish worker encountered an error.'));
       };
 
-      this.worker.addEventListener('message', onMessage);
-      this.worker.addEventListener('error', onError);
+      this.worker.on('message', onMessage);
+      this.worker.on('error', onError);
     });
   }
 
   /**
    * Analiza múltiples posiciones usando Stockfish.
-   * @param positions Lista de posiciones con formato FEN.
+   * @param positions Lista de posiciones con formato FEN y sus movimientos.
    * @param depth La profundidad del análisis.
    * @returns Un informe con las evaluaciones de cada posición.
    */
@@ -158,7 +160,7 @@ export class EngineService implements OnModuleDestroy {
   }
 
   /**
-   * Limpia el recurso del Web Worker.
+   * Limpia el recurso del Worker.
    */
   private cleanupWorker(): void {
     if (this.worker) {
@@ -191,48 +193,45 @@ export class EngineService implements OnModuleDestroy {
    * @returns El cambio de evaluación (delta).
    */
   calculateEvaluationDelta(current: Evaluation, previous: Evaluation): number {
-    if (current.type === "mate" || previous.type === "mate") {
-      // Evaluación especial para jugadas de mate.
-      if (current.type === "mate" && previous.type === "mate") {
+    if (current.type === 'mate' || previous.type === 'mate') {
+      if (current.type === 'mate' && previous.type === 'mate') {
         return current.value - previous.value;
       }
-      // Si uno de los valores no es "mate", asignar un cambio grande.
-      return current.type === "mate" ? 1000 : -1000;
+      return current.type === 'mate' ? 1000 : -1000;
     }
-    // Evaluación estándar (type === "cp").
     return current.value - previous.value;
   }
 
-   /**
+  /**
    * Obtiene el mejor movimiento sugerido por el motor.
    * @param engineLines Las líneas de evaluación del motor.
+   * @param fen La posición actual en FEN.
    * @returns Objeto con el movimiento en ambas notaciones UCI y SAN.
-   * @throws Error si no hay líneas evaluadas o falta la notación UCI.
    */
-   getSuggestedMove(engineLines: EngineLine[], fen: string): { san: string; uci: string } {
+  getSuggestedMove(engineLines: EngineLine[], fen: string): { san: string; uci: string } {
     if (!engineLines || engineLines.length === 0) {
-      throw new Error("No se encontraron líneas evaluadas por el motor.");
+      throw new Error('No se encontraron líneas evaluadas por el motor.');
     }
 
     const bestLine = engineLines[0];
-    
+
     if (!bestLine.moveUCI) {
-      throw new Error("No se encontró la notación UCI para el movimiento sugerido.");
+      throw new Error('No se encontró la notación UCI para el movimiento sugerido.');
     }
 
-    // Si no tenemos SAN, convertimos UCI a SAN usando chess.js
     const san = bestLine.moveSAN ?? this.convertUCItoSAN(bestLine.moveUCI, fen);
 
     return {
       san,
-      uci: bestLine.moveUCI
+      uci: bestLine.moveUCI,
     };
   }
 
   /**
-   * Convierte un movimiento de notación UCI a SAN usando chess.js
-   * @param uci Movimiento en notación UCI
-   * @returns Movimiento en notación SAN
+   * Convierte un movimiento de notación UCI a SAN usando chess.js.
+   * @param uci Movimiento en notación UCI.
+   * @param fen La posición actual en FEN.
+   * @returns Movimiento en notación SAN.
    */
   private convertUCItoSAN(uci: string, fen: string): string {
     const chess = new Chess(fen);
@@ -241,6 +240,6 @@ export class EngineService implements OnModuleDestroy {
       to: uci.substring(2, 4),
       promotion: uci[4],
     });
-    return move?.san ?? uci; // Fallback a UCI si falla la conversión
-  }  
+    return move?.san ?? uci;
+  }
 }
