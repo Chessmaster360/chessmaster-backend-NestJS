@@ -234,13 +234,13 @@ export class EngineService implements OnModuleDestroy {
    * @param uci Movimiento en notación UCI
    * @returns Movimiento en notación SAN
    */
-  private convertUCItoSAN(uci: string): string {
-    const chess = new Chess();
+  private convertUCItoSAN(uci: string, fen: string): string {
+    const chess = new Chess(fen);
     const move = chess.move({
       from: uci.substring(0, 2),
       to: uci.substring(2, 4),
-      promotion: uci[4]
+      promotion: uci[4],
     });
-    return move?.san ?? uci; // Si la conversión falla, devolvemos UCI como fallback
-  }
+    return move?.san ?? uci; // Fallback a UCI si falla la conversión
+  }  
 }
