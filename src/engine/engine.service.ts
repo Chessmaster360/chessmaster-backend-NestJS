@@ -209,7 +209,7 @@ export class EngineService implements OnModuleDestroy {
    * @returns Objeto con el movimiento en ambas notaciones UCI y SAN.
    * @throws Error si no hay líneas evaluadas o falta la notación UCI.
    */
-   getSuggestedMove(engineLines: EngineLine[]): { san: string; uci: string } {
+   getSuggestedMove(engineLines: EngineLine[], fen: string): { san: string; uci: string } {
     if (!engineLines || engineLines.length === 0) {
       throw new Error("No se encontraron líneas evaluadas por el motor.");
     }
@@ -221,7 +221,7 @@ export class EngineService implements OnModuleDestroy {
     }
 
     // Si no tenemos SAN, convertimos UCI a SAN usando chess.js
-    const san = bestLine.moveSAN ?? this.convertUCItoSAN(bestLine.moveUCI);
+    const san = bestLine.moveSAN ?? this.convertUCItoSAN(bestLine.moveUCI, fen);
 
     return {
       san,

@@ -1,10 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChessService } from './chess.service';
 import { EngineService } from '../engine/engine.service';
 import { Position, EvaluatedPosition, Report } from '../interfaces/analysis.interfaces';
+import { Chess, validateFen } from 'chess.js';
 
 @Injectable()
 export class AnalysisService {
+  
+  private chess = new Chess();
   
   constructor(
     private readonly chessService: ChessService,
@@ -19,6 +22,11 @@ export class AnalysisService {
    */
   async analyzeGame(pgn: string, depth: number): Promise<Report> {
     try {
+
+
+      // Paso 1: Validar el PGN
+      this.validatePgn(pgn);
+
       // Paso 1: Parsear el PGN a posiciones.
       const positions: Position[] = this.chessService.parsePgn(pgn);
       if (!positions || positions.length === 0) {
@@ -39,6 +47,19 @@ export class AnalysisService {
       console.error('Error durante el análisis de la partida:', error.message);
       throw new Error('Falló el análisis de la partida. Por favor, revisa el PGN y los parámetros.');
     }
+  }
+
+  /**
+   * Valida que un PGN sea válido.
+   * @param pgn El PGN a validar.
+   * @returns `true` si el PGN es válido, de lo contrario lanza una excepción.
+   */
+  validatePgn(pgn: string): boolean {
+    const isValid = validateFen(pgn).ok;
+    if (!isValid) {
+      throw new BadRequestException('El PGN proporcionado no es válido.');
+    }
+    return true;
   }
 
   /**
@@ -71,7 +92,7 @@ export class AnalysisService {
           : 0;
 
         const classification = this.chessService.classifyMove(evaluationDelta);
-        const suggestedMove = this.engineService.getSuggestedMove(engineLines);
+        const suggestedMove = this.engineService.getSuggestedMove(engineLines, position.fen);
 
         evaluatedPositions.push({
           ...position,
