@@ -29,7 +29,7 @@ export class EngineService implements OnModuleDestroy {
    * @returns Una instancia de Worker.
    */
   private initWorker(): Worker {
-    const workerPath = join(__dirname, '..', 'src', 'engine', 'stockfish', 'stockfish-nnue-16.js');
+    const workerPath = join(__dirname, 'engine', 'stockfish', 'stockfish-nnue-16.js');
     const worker = new Worker(workerPath, {
       execArgv: [], // Configuración para evitar argumentos adicionales en Node.js
     });

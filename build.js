@@ -1,17 +1,23 @@
 const { exec } = require('child_process');
 const fs = require('fs-extra');
+const path = require('path');
 
-// Step 1: Run NestJS build
 exec('nest build', (err, stdout, stderr) => {
   if (err) {
-    console.error('Build failed:', err);
+    console.error('❌ Error en la compilación:', err);
     return;
   }
 
   console.log(stdout);
 
-  // Step 2: Copy required files
-  fs.copySync('src/engine/stockfish', 'dist/src/engine/stockfish');
+  // Copiar Stockfish
+  const srcPath = path.join(__dirname, 'src', 'engine', 'stockfish');
+  const destPath = path.join(__dirname, 'dist', 'engine', 'stockfish');
 
-  console.log('Build completed successfully!');
+  if (!fs.existsSync(destPath)) {
+    fs.copySync(srcPath, destPath);
+    console.log('✅ Stockfish copiado correctamente.');
+  }
+
+  console.log('✅ Build completado correctamente.');
 });
