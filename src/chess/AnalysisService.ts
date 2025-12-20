@@ -2,17 +2,17 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChessService } from './chess.service';
 import { EngineService } from '../engine/engine.service';
 import { Position, EvaluatedPosition, Report } from '../interfaces/analysis.interfaces';
-import { Chess, validateFen } from 'chess.js';
+import { Chess } from 'chess.js';
 
 @Injectable()
 export class AnalysisService {
-  
+
   private chess = new Chess();
-  
+
   constructor(
     private readonly chessService: ChessService,
     private readonly engineService: EngineService,
-  ) {}
+  ) { }
 
   /**
    * Orquesta el flujo completo del análisis de una partida.
@@ -55,11 +55,17 @@ export class AnalysisService {
    * @returns `true` si el PGN es válido, de lo contrario lanza una excepción.
    */
   validatePgn(pgn: string): boolean {
-    const isValid = validateFen(pgn).ok;
-    if (!isValid) {
-      throw new BadRequestException('El PGN proporcionado no es válido.');
+    try {
+      const testChess = new Chess();
+      testChess.loadPgn(pgn);
+      // Check if any moves were loaded
+      if (testChess.history().length === 0) {
+        throw new BadRequestException('El PGN proporcionado no contiene movimientos válidos.');
+      }
+      return true;
+    } catch (error) {
+      throw new BadRequestException('El PGN proporcionado no es válido: ' + error.message);
     }
-    return true;
   }
 
   /**
@@ -84,11 +90,11 @@ export class AnalysisService {
         }
 
         const bestLine = engineLines[0];
-        const evaluationDelta = index > 0 
+        const evaluationDelta = index > 0
           ? this.engineService.calculateEvaluationDelta(
-              bestLine.evaluation,
-              evaluatedPositions[index - 1].evaluation,
-            )
+            bestLine.evaluation,
+            evaluatedPositions[index - 1].evaluation,
+          )
           : 0;
 
         const classification = this.chessService.classifyMove(evaluationDelta);

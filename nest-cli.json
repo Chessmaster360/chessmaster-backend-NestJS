@@ -3,15 +3,19 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true,
+    "deleteOutDir": false,
     "assets": [
       {
-        "include": "src/engine/stockfish/*.js",
-        "outDir": "dist/src/engine/stockfish"
+        "include": "engine/stockfish/*.js",
+        "outDir": "dist"
       },
       {
-        "include": "src/engine/stockfish/*.wasm",
-        "outDir": "dist/src/engine/stockfish"
+        "include": "engine/stockfish/*.wasm",
+        "outDir": "dist"
+      },
+      {
+        "include": "engine/stockfish/*.exe",
+        "outDir": "dist"
       }
     ],
     "watchAssets": true

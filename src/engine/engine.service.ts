@@ -1,7 +1,8 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Chess, validateFen } from 'chess.js';
-import { Worker } from 'worker_threads';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { join } from 'path';
+import { existsSync } from 'fs';
 
 interface Evaluation {
   type: 'cp' | 'mate';
@@ -17,180 +18,243 @@ interface EngineLine {
 }
 
 @Injectable()
-export class EngineService implements OnModuleDestroy {
-  private worker: Worker | null = null;
+export class EngineService implements OnModuleInit, OnModuleDestroy {
+  private stockfish: ChildProcessWithoutNullStreams | null = null;
+  private stockfishPath: string;
+  private isReady = false;
+  private pendingResolve: ((lines: EngineLine[]) => void) | null = null;
+  private currentMessages: string[] = [];
+  private currentDepth = 0;
 
   constructor() {
-    this.worker = this.initWorker();
+    // Determine stockfish path based on OS
+    const isWindows = process.platform === 'win32';
+    const binaryName = isWindows ? 'stockfish-windows-x86-64-avx2.exe' : 'stockfish';
+    this.stockfishPath = join(__dirname, 'stockfish', binaryName);
+  }
+
+  async onModuleInit() {
+    await this.initEngine();
   }
 
   /**
-   * Inicializa un Worker con el motor de Stockfish.
-   * @returns Una instancia de Worker.
+   * Initialize the Stockfish engine
    */
-  private initWorker(): Worker {
-    const workerPath = join(__dirname, 'stockfish', 'stockfish-nnue-16.js');
-    const worker = new Worker(workerPath, {
-      execArgv: [], // Configuración para evitar argumentos adicionales en Node.js
+  private async initEngine(): Promise<void> {
+    // Check if binary exists
+    if (!existsSync(this.stockfishPath)) {
+      console.error(`Stockfish binary not found at: ${this.stockfishPath}`);
+      throw new Error('Stockfish binary not found. Please ensure stockfish is installed.');
+    }
+
+    console.log(`🔧 Starting Stockfish from: ${this.stockfishPath}`);
+
+    // Spawn the stockfish process
+    this.stockfish = spawn(this.stockfishPath);
+
+    // Handle stdout
+    this.stockfish.stdout.on('data', (data: Buffer) => {
+      const lines = data.toString().split('\n').filter(line => line.trim());
+      for (const line of lines) {
+        this.handleMessage(line);
+      }
     });
 
-    // Configuración inicial del motor
-    worker.postMessage('uci');
-    worker.postMessage('setoption name MultiPV value 2');
+    // Handle stderr
+    this.stockfish.stderr.on('data', (data: Buffer) => {
+      console.error(`Stockfish stderr: ${data}`);
+    });
 
-    return worker;
+    // Handle exit
+    this.stockfish.on('close', (code) => {
+      console.log(`Stockfish process exited with code ${code}`);
+      this.stockfish = null;
+      this.isReady = false;
+    });
+
+    // Initialize UCI protocol - wait for 'uciok'
+    this.sendCommand('uci');
+    await this.waitForMessage('uciok', 10000);
+
+    // Configure MultiPV
+    this.sendCommand('setoption name MultiPV value 2');
+    this.sendCommand('isready');
+    await this.waitForMessage('readyok', 10000);
+
+    this.isReady = true;
+    console.log('✅ Stockfish engine initialized successfully');
   }
 
   /**
-   * Evalúa una posición FEN utilizando Stockfish.
-   * @param fen La posición en formato FEN.
-   * @param depth La profundidad del análisis.
-   * @param verbose Si se desea mostrar logs detallados.
-   * @returns Un arreglo con las mejores líneas evaluadas.
+   * Handle a message from Stockfish
    */
-  async evaluatePosition(
-    fen: string,
-    depth: number,
-    verbose = false
-  ): Promise<EngineLine[]> {
-    if (!this.isValidFen(fen)) {
-      throw new Error('Formato FEN inválido.');
+  private handleMessage(message: string): void {
+    // Store messages for analysis parsing
+    this.currentMessages.push(message);
+
+    // Check for ready state
+    if (message === 'readyok') {
+      this.isReady = true;
     }
 
-    // Reinicia el motor si no existe o fue terminado.
-    if (!this.worker) {
-      this.worker = this.initWorker();
+    // Parse depth from info messages
+    const depthMatch = message.match(/depth (\d+)/);
+    if (depthMatch) {
+      this.currentDepth = parseInt(depthMatch[1]);
     }
 
-    this.worker.postMessage(`position fen ${fen}`);
-    this.worker.postMessage(`go depth ${depth}`);
+    // Check for bestmove (analysis complete)
+    if (message.startsWith('bestmove') && this.pendingResolve) {
+      const lines = this.parseAnalysisResults();
+      this.pendingResolve(lines);
+      this.pendingResolve = null;
+      this.currentMessages = [];
+    }
+  }
 
-    const messages: string[] = [];
+  /**
+   * Parse analysis results from accumulated messages
+   */
+  private parseAnalysisResults(): EngineLine[] {
     const lines: EngineLine[] = [];
+    const latestDepth = this.currentDepth;
 
-    return new Promise((resolve, reject) => {
-      const onMessage = (event: { data: string }) => {
-        const message = event.data;
-        messages.unshift(message);
+    for (const message of this.currentMessages) {
+      if (!message.startsWith('info depth')) continue;
 
-        if (verbose) console.log('[Stockfish]:', message);
+      const depthMatch = message.match(/depth (\d+)/);
+      const multipvMatch = message.match(/multipv (\d+)/);
+      const moveMatch = message.match(/ pv ([a-h][1-8][a-h][1-8][qrbnQRBN]?)/);
+      const cpMatch = message.match(/score cp (-?\d+)/);
+      const mateMatch = message.match(/score mate (-?\d+)/);
 
-        const latestDepth = parseInt(message.match(/depth (\d+)/)?.[1] || '0');
+      if (!depthMatch || !moveMatch) continue;
 
-        if (message.startsWith('bestmove') || message.includes('depth 0')) {
-          const searchMessages = messages.filter((msg) =>
-            msg.startsWith('info depth')
-          );
+      const depth = parseInt(depthMatch[1]);
+      const id = multipvMatch ? parseInt(multipvMatch[1]) : 1;
+      const moveUCI = moveMatch[1];
 
-          for (const searchMessage of searchMessages) {
-            const idString = searchMessage.match(/multipv (\d+)/)?.[1];
-            const depthString = searchMessage.match(/depth (\d+)/)?.[1];
-            const moveUCI = searchMessage.match(/ pv (.+?) (?= |$)/)?.[1];
-            const evaluation: Evaluation = {
-              type: searchMessage.includes(' cp ') ? 'cp' : 'mate',
-              value: parseInt(
-                searchMessage.match(/(?:cp |mate )([-+]?\d+)/)?.[1] || '0'
-              ),
-            };
+      // Only use results from the latest depth
+      if (depth !== latestDepth) continue;
+      if (lines.some(l => l.id === id)) continue;
 
-            // Cambia el signo de evaluación si es el turno de las negras.
-            if (fen.includes(' b ')) evaluation.value *= -1;
-
-            if (!idString || !depthString || !moveUCI) continue;
-
-            const id = parseInt(idString);
-            const depth = parseInt(depthString);
-
-            if (depth !== latestDepth || lines.some((line) => line.id === id)) {
-              continue;
-            }
-
-            lines.push({
-              id,
-              depth,
-              evaluation,
-              moveUCI,
-            });
-          }
-
-          this.cleanupWorker();
-          resolve(lines);
-        }
+      const evaluation: Evaluation = {
+        type: mateMatch ? 'mate' : 'cp',
+        value: mateMatch ? parseInt(mateMatch[1]) : (cpMatch ? parseInt(cpMatch[1]) : 0),
       };
 
-      const onError = () => {
-        this.cleanupWorker();
-        reject(new Error('Stockfish worker encountered an error.'));
-      };
-
-      this.worker.on('message', onMessage);
-      this.worker.on('error', onError);
-    });
-  }
-
-  /**
-   * Analiza múltiples posiciones usando Stockfish.
-   * @param positions Lista de posiciones con formato FEN y sus movimientos.
-   * @param depth La profundidad del análisis.
-   * @returns Un informe con las evaluaciones de cada posición.
-   */
-  async analysePositions(
-    positions: { fen: string; move: string }[],
-    depth = 20
-  ): Promise<{ fen: string; move: string; topLines: EngineLine[] }[]> {
-    const report: { fen: string; move: string; topLines: EngineLine[] }[] = [];
-
-    for (const position of positions) {
-      const topLines = await this.evaluatePosition(position.fen, depth);
-      report.push({
-        fen: position.fen,
-        move: position.move,
-        topLines,
+      lines.push({
+        id,
+        depth,
+        evaluation,
+        moveUCI,
       });
     }
 
-    return report;
+    // Sort by multipv id
+    lines.sort((a, b) => a.id - b.id);
+    return lines;
   }
 
   /**
-   * Detiene el motor y libera recursos.
+   * Send a command to Stockfish
    */
-  stopEngine(): void {
-    this.cleanupWorker();
+  private sendCommand(command: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.stockfish) {
+        reject(new Error('Stockfish not initialized'));
+        return;
+      }
+      this.stockfish.stdin.write(`${command}\n`, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
   }
 
   /**
-   * Limpia el recurso del Worker.
+   * Wait for Stockfish to be ready
    */
-  private cleanupWorker(): void {
-    if (this.worker) {
-      this.worker.terminate();
-      this.worker = null;
+  private waitForReady(timeout = 5000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const check = () => {
+        if (this.isReady) {
+          resolve();
+        } else if (Date.now() - startTime > timeout) {
+          reject(new Error('Stockfish ready timeout'));
+        } else {
+          setTimeout(check, 50);
+        }
+      };
+      check();
+    });
+  }
+
+  /**
+   * Wait for a specific message from Stockfish
+   */
+  private waitForMessage(expectedMessage: string, timeout = 10000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const check = () => {
+        // Check if any accumulated message contains expected message
+        if (this.currentMessages.some(msg => msg.includes(expectedMessage))) {
+          resolve();
+        } else if (Date.now() - startTime > timeout) {
+          reject(new Error(`Timeout waiting for: ${expectedMessage}`));
+        } else {
+          setTimeout(check, 50);
+        }
+      };
+      check();
+    });
+  }
+
+  /**
+   * Evaluate a position using Stockfish
+   */
+  async evaluatePosition(fen: string, depth: number): Promise<EngineLine[]> {
+    if (!this.isValidFen(fen)) {
+      throw new Error('Invalid FEN format');
     }
+
+    // Ensure engine is ready
+    if (!this.stockfish || !this.isReady) {
+      await this.initEngine();
+    }
+
+    // Clear previous messages
+    this.currentMessages = [];
+    this.currentDepth = 0;
+
+    // Set position and start analysis
+    await this.sendCommand(`position fen ${fen}`);
+    await this.sendCommand(`go depth ${depth}`);
+
+    // Wait for analysis to complete
+    return new Promise((resolve, reject) => {
+      this.pendingResolve = resolve;
+
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        if (this.pendingResolve) {
+          this.pendingResolve = null;
+          reject(new Error('Analysis timeout'));
+        }
+      }, 30000);
+    });
   }
 
   /**
-   * Comprueba si el formato FEN es válido.
-   * @param fen La posición en formato FEN.
-   * @returns True si el FEN es válido.
+   * Validate FEN format
    */
   private isValidFen(fen: string): boolean {
-    const valid = validateFen(fen);
-    return valid.ok;
+    return validateFen(fen).ok;
   }
 
   /**
-   * Hook para limpiar recursos al destruir el módulo.
-   */
-  onModuleDestroy(): void {
-    this.stopEngine();
-  }
-
-  /**
-   * Calcula la diferencia en la evaluación entre dos posiciones consecutivas.
-   * @param current La evaluación de la posición actual.
-   * @param previous La evaluación de la posición anterior.
-   * @returns El cambio de evaluación (delta).
+   * Calculate evaluation delta between two positions
    */
   calculateEvaluationDelta(current: Evaluation, previous: Evaluation): number {
     if (current.type === 'mate' || previous.type === 'mate') {
@@ -203,23 +267,15 @@ export class EngineService implements OnModuleDestroy {
   }
 
   /**
-   * Obtiene el mejor movimiento sugerido por el motor.
-   * @param engineLines Las líneas de evaluación del motor.
-   * @param fen La posición actual en FEN.
-   * @returns Objeto con el movimiento en ambas notaciones UCI y SAN.
+   * Get the suggested best move
    */
   getSuggestedMove(engineLines: EngineLine[], fen: string): { san: string; uci: string } {
     if (!engineLines || engineLines.length === 0) {
-      throw new Error('No se encontraron líneas evaluadas por el motor.');
+      throw new Error('No engine lines available');
     }
 
     const bestLine = engineLines[0];
-
-    if (!bestLine.moveUCI) {
-      throw new Error('No se encontró la notación UCI para el movimiento sugerido.');
-    }
-
-    const san = bestLine.moveSAN ?? this.convertUCItoSAN(bestLine.moveUCI, fen);
+    const san = this.convertUCItoSAN(bestLine.moveUCI, fen);
 
     return {
       san,
@@ -228,18 +284,39 @@ export class EngineService implements OnModuleDestroy {
   }
 
   /**
-   * Convierte un movimiento de notación UCI a SAN usando chess.js.
-   * @param uci Movimiento en notación UCI.
-   * @param fen La posición actual en FEN.
-   * @returns Movimiento en notación SAN.
+   * Convert UCI to SAN notation
    */
   private convertUCItoSAN(uci: string, fen: string): string {
-    const chess = new Chess(fen);
-    const move = chess.move({
-      from: uci.substring(0, 2),
-      to: uci.substring(2, 4),
-      promotion: uci[4],
-    });
-    return move?.san ?? uci;
+    try {
+      const chess = new Chess(fen);
+      const move = chess.move({
+        from: uci.substring(0, 2),
+        to: uci.substring(2, 4),
+        promotion: uci[4] as any,
+      });
+      return move?.san ?? uci;
+    } catch {
+      return uci;
+    }
+  }
+
+  /**
+   * Stop any running analysis
+   */
+  async stopAnalysis(): Promise<void> {
+    if (this.stockfish) {
+      await this.sendCommand('stop');
+    }
+  }
+
+  /**
+   * Cleanup on module destroy
+   */
+  onModuleDestroy(): void {
+    if (this.stockfish) {
+      this.stockfish.stdin.write('quit\n');
+      this.stockfish.kill();
+      this.stockfish = null;
+    }
   }
 }

@@ -15,10 +15,7 @@ import { ChessModule } from './chess/chess.module';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
         const uri = configService.get<string>('MONGO_URI');
-        console.log('🔍 MONGO_URI loaded =', uri ? 'YES' : 'NO');
-        if (uri) {
-          console.log('🔍 URI preview =', uri.replace(/:([^:@]+)@/, ':****@'));
-        }
+
         return {
           uri,
           // No especificamos ssl ni retryWrites - MongoDB Atlas lo maneja automáticamente
