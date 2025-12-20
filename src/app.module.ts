@@ -6,22 +6,24 @@ import { ChessModule } from './chess/chess.module';
 
 @Module({
   imports: [
-    // ConfigModule cargará la configuración adecuada según NODE_ENV
+    // ConfigModule carga el archivo .env desde la raíz del proyecto
     ConfigModule.forRoot({
-      envFilePath: [
-        `.env`, // Archivo genérico
-        `src/config/${process.env.MONGO_URI || 'development'}.env`, // Según el entorno
-      ],
-      isGlobal: true, // Hace accesible la configuración globalmente
+      isGlobal: true,
     }),
     // Configura Mongoose dinámicamente según la configuración
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGO_URI') || configService.get<string>('MONGO_URI'),
-        ssl: configService.get<string>('NODE_ENV') === 'production',
-        retryWrites: false, // Importante para Cosmos DB
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const uri = configService.get<string>('MONGO_URI');
+        console.log('🔍 MONGO_URI loaded =', uri ? 'YES' : 'NO');
+        if (uri) {
+          console.log('🔍 URI preview =', uri.replace(/:([^:@]+)@/, ':****@'));
+        }
+        return {
+          uri,
+          // No especificamos ssl ni retryWrites - MongoDB Atlas lo maneja automáticamente
+        };
+      },
       inject: [ConfigService],
     }),
     UsersModule,
@@ -30,4 +32,4 @@ import { ChessModule } from './chess/chess.module';
   controllers: [],
   providers: [],
 })
-export class AppModule {}
+export class AppModule { }
