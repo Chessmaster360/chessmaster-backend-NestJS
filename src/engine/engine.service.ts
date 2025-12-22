@@ -114,10 +114,10 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Parse analysis results from accumulated messages
+   * Returns best available results even if target depth not reached
    */
   private parseAnalysisResults(): EngineLine[] {
-    const lines: EngineLine[] = [];
-    const latestDepth = this.currentDepth;
+    const linesByDepth: Map<number, EngineLine[]> = new Map();
 
     for (const message of this.currentMessages) {
       if (!message.startsWith('info depth')) continue;
@@ -134,24 +134,30 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       const id = multipvMatch ? parseInt(multipvMatch[1]) : 1;
       const moveUCI = moveMatch[1];
 
-      // Only use results from the latest depth
-      if (depth !== latestDepth) continue;
-      if (lines.some(l => l.id === id)) continue;
-
       const evaluation: Evaluation = {
         type: mateMatch ? 'mate' : 'cp',
         value: mateMatch ? parseInt(mateMatch[1]) : (cpMatch ? parseInt(cpMatch[1]) : 0),
       };
 
-      lines.push({
-        id,
-        depth,
-        evaluation,
-        moveUCI,
-      });
+      if (!linesByDepth.has(depth)) {
+        linesByDepth.set(depth, []);
+      }
+
+      const depthLines = linesByDepth.get(depth)!;
+      if (!depthLines.some(l => l.id === id)) {
+        depthLines.push({ id, depth, evaluation, moveUCI });
+      }
     }
 
-    // Sort by multipv id
+    // Get the highest depth that has results
+    const depths = Array.from(linesByDepth.keys()).sort((a, b) => b - a);
+    const bestDepth = depths[0];
+
+    if (!bestDepth) {
+      return [];
+    }
+
+    const lines = linesByDepth.get(bestDepth) || [];
     lines.sort((a, b) => a.id - b.id);
     return lines;
   }
@@ -212,6 +218,27 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Check if position is terminal (checkmate or stalemate)
+   */
+  private isTerminalPosition(fen: string): { isTerminal: boolean; result?: string } {
+    try {
+      const chess = new Chess(fen);
+      if (chess.isCheckmate()) {
+        return { isTerminal: true, result: 'checkmate' };
+      }
+      if (chess.isStalemate()) {
+        return { isTerminal: true, result: 'stalemate' };
+      }
+      if (chess.isDraw()) {
+        return { isTerminal: true, result: 'draw' };
+      }
+      return { isTerminal: false };
+    } catch {
+      return { isTerminal: false };
+    }
+  }
+
+  /**
    * Evaluate a position using Stockfish
    */
   async evaluatePosition(fen: string, depth: number): Promise<EngineLine[]> {
@@ -219,6 +246,30 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       throw new Error('Invalid FEN format');
     }
 
+    // Check for terminal position (checkmate, stalemate, draw)
+    const terminalCheck = this.isTerminalPosition(fen);
+    if (terminalCheck.isTerminal) {
+      // Return a synthetic evaluation for terminal positions
+      const chess = new Chess(fen);
+      const evaluation: Evaluation = terminalCheck.result === 'checkmate'
+        ? { type: 'mate', value: 0 } // Already mated
+        : { type: 'cp', value: 0 }; // Draw
+
+      return [{
+        id: 1,
+        depth: depth,
+        evaluation,
+        moveUCI: '', // No legal moves in terminal position
+      }];
+    }
+
+    return this.evaluatePositionInternal(fen, depth);
+  }
+
+  /**
+   * Internal position evaluation
+   */
+  private async evaluatePositionInternal(fen: string, depth: number): Promise<EngineLine[]> {
     // Ensure engine is ready
     if (!this.stockfish || !this.isReady) {
       await this.initEngine();
@@ -232,18 +283,76 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
     await this.sendCommand(`position fen ${fen}`);
     await this.sendCommand(`go depth ${depth}`);
 
+    // Timeout scales with depth (5 seconds + 2 seconds per depth level, max 60s)
+    const timeoutMs = Math.min(60000, Math.max(15000, 5000 + depth * 2000));
+
     // Wait for analysis to complete
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       this.pendingResolve = resolve;
 
-      // Timeout after 30 seconds
-      setTimeout(() => {
+      // Timeout - return partial results instead of rejecting
+      setTimeout(async () => {
         if (this.pendingResolve) {
-          this.pendingResolve = null;
-          reject(new Error('Analysis timeout'));
+          await this.sendCommand('stop');
+          // Small delay for final results
+          await new Promise(r => setTimeout(r, 200));
+          const partialResults = this.parseAnalysisResults();
+          if (this.pendingResolve) {
+            this.pendingResolve(partialResults);
+            this.pendingResolve = null;
+          }
+          this.currentMessages = [];
         }
-      }, 30000);
+      }, timeoutMs);
     });
+  }
+
+  /**
+   * Evaluate position with retry logic
+   * Tries up to 3 times with decreasing depth if no results
+   */
+  async evaluatePositionWithRetry(fen: string, depth: number, maxRetries = 3): Promise<EngineLine[]> {
+    let currentDepth = depth;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const results = await this.evaluatePosition(fen, currentDepth);
+
+        if (results && results.length > 0) {
+          return results;
+        }
+
+        // No results - try with lower depth
+        console.warn(`Attempt ${attempt + 1}: No results for ${fen.substring(0, 30)}... at depth ${currentDepth}`);
+        currentDepth = Math.max(8, currentDepth - 4); // Reduce depth, minimum 8
+
+        // Reset engine if it seems stuck
+        if (attempt > 0) {
+          console.log('Restarting engine...');
+          await this.restartEngine();
+        }
+      } catch (error) {
+        console.error(`Attempt ${attempt + 1} failed:`, error.message);
+        currentDepth = Math.max(8, currentDepth - 4);
+      }
+    }
+
+    // Final fallback - return empty (will be handled by AnalysisService)
+    return [];
+  }
+
+  /**
+   * Restart the engine (for recovery)
+   */
+  private async restartEngine(): Promise<void> {
+    if (this.stockfish) {
+      this.stockfish.stdin.write('quit\n');
+      this.stockfish.kill();
+      this.stockfish = null;
+      this.isReady = false;
+    }
+    await new Promise(r => setTimeout(r, 500));
+    await this.initEngine();
   }
 
   /**

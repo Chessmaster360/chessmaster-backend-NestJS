@@ -3,14 +3,16 @@ import { HttpModule } from '@nestjs/axios';
 import { ChessService } from './chess.service';
 import { ChessController } from './chess.controller';
 import { AnalysisService } from './AnalysisService';
-import { EngineModule } from '../engine/engine.module'; // Importa el EngineModule
+import { OpeningsService } from './openings.service';
+import { EngineModule } from '../engine/engine.module';
 
 @Module({
   imports: [
-    HttpModule, // Para manejar peticiones HTTP a Chess.com
-    EngineModule, // Asegúrate de que EngineService esté disponible
+    HttpModule,
+    EngineModule,
   ],
   controllers: [ChessController],
-  providers: [ChessService, AnalysisService],
+  providers: [ChessService, AnalysisService, OpeningsService],
 })
-export class ChessModule {}
+export class ChessModule { }
+

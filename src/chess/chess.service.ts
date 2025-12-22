@@ -20,7 +20,7 @@ export class ChessService {
 
   constructor(
     private readonly httpService: HttpService,
-  ) {}
+  ) { }
 
   async getPlayerArchives(username: string): Promise<string[]> {
     const url = `https://api.chess.com/pub/player/${username}/games/archives`;
@@ -60,13 +60,13 @@ export class ChessService {
       throw new NotFoundException('No se pudo obtener el archivo PGN.');
     }
   }
-  
-   /**
-   * Convierte un PGN en una lista de posiciones.
-   * @param pgn El PGN de la partida.
-   * @returns Un arreglo de objetos `Position` con FEN y detalles de movimiento.
-   */
-   parsePgn(pgn: string): Position[] {
+
+  /**
+  * Convierte un PGN en una lista de posiciones.
+  * @param pgn El PGN de la partida.
+  * @returns Un arreglo de objetos `Position` con FEN y detalles de movimiento.
+  */
+  parsePgn(pgn: string): Position[] {
     this.chess.loadPgn(pgn); // Cargar el PGN en el tablero.
 
     const positions: Position[] = [];
@@ -91,18 +91,81 @@ export class ChessService {
 
   /**
    * Clasifica un movimiento basado en el delta de evaluación.
-   * @param evaluationDelta La diferencia de evaluación del movimiento.
+   * @param evaluationDelta La diferencia de evaluación (negativo = perdida de ventaja para el jugador que movio).
+   * @param previousEval Evaluación antes del movimiento (en centipawns).
+   * @param currentEval Evaluación después del movimiento (en centipawns).
+   * @param isBestMove Si el movimiento jugado es el mejor sugerido por el motor.
    * @returns La clasificación del movimiento como `Classification`.
+   * 
+   * Classification logic:
+   * - brilliant: Finds a winning move in a losing/equal position (swing > 150cp in your favor)
+   * - great: Finds a very strong move that gains significant advantage (gain 50-150cp) 
+   * - best: Plays the engine's top recommendation
+   * - excellent: Small loss (0-20cp) - maintaining equality
+   * - good: Minor loss (20-50cp)
+   * - inaccuracy: Noticeable loss (50-100cp)
+   * - mistake: Significant loss (100-300cp)
+   * - blunder: Major loss (>300cp) or missing mate
+   * - forced: Only one legal move
+   * - book: Opening move (determined separately by OpeningsService)
    */
-  classifyMove(evaluationDelta: number): Classification {
-    if (evaluationDelta === 0) return 'best';
-    if (evaluationDelta > 0 && evaluationDelta <= 50) return 'excellent';
-    if (evaluationDelta > 50 && evaluationDelta <= 150) return 'good';
-    if (evaluationDelta > 150 && evaluationDelta <= 300) return 'inaccuracy';
-    if (evaluationDelta > 300 && evaluationDelta <= 700) return 'mistake';
-    if (evaluationDelta > 700) return 'blunder';
-    if (evaluationDelta < 0 && Math.abs(evaluationDelta) <= 50) return 'forced';
-    return 'book'; // Movimiento en apertura.
+  classifyMove(
+    evaluationDelta: number,
+    previousEval?: number,
+    currentEval?: number,
+    isBestMove: boolean = false
+  ): Classification {
+    // evaluationDelta > 0 means the position got WORSE for the player who moved (they lost advantage)
+    // evaluationDelta < 0 means the position got BETTER for the player who moved (they gained advantage)
+
+    // If this is the best move from the engine
+    if (isBestMove) {
+      return 'best';
+    }
+
+    // Check for brilliant: found winning move from losing/equal position
+    // This happens when your eval improves significantly AND you were not already winning
+    if (evaluationDelta < -150 && previousEval !== undefined && previousEval <= 100) {
+      return 'brilliant';
+    }
+
+    // Check for great: significant improvement in position (gain 50-150cp)
+    if (evaluationDelta < -50 && evaluationDelta >= -150) {
+      return 'great';
+    }
+
+    // Maintaining equality or tiny loss (excellent)
+    if (evaluationDelta >= 0 && evaluationDelta <= 20) {
+      return 'excellent';
+    }
+
+    // Small loss (good)
+    if (evaluationDelta > 20 && evaluationDelta <= 50) {
+      return 'good';
+    }
+
+    // Inaccuracy
+    if (evaluationDelta > 50 && evaluationDelta <= 100) {
+      return 'inaccuracy';
+    }
+
+    // Mistake
+    if (evaluationDelta > 100 && evaluationDelta <= 300) {
+      return 'mistake';
+    }
+
+    // Blunder
+    if (evaluationDelta > 300) {
+      return 'blunder';
+    }
+
+    // Position improved slightly (player found good resources)
+    if (evaluationDelta < 0 && evaluationDelta >= -50) {
+      return 'excellent';
+    }
+
+    // Default for edge cases
+    return 'good';
   }
 
   /**
