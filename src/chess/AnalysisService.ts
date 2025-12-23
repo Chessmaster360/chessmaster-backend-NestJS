@@ -4,184 +4,204 @@ import { EngineService } from '../engine/engine.service';
 import { OpeningsService } from './openings.service';
 import { Position, EvaluatedPosition, Report, Classification } from '../interfaces/analysis.interfaces';
 import { Chess } from 'chess.js';
+import { EvaluationUtils } from './evaluation.util';
 
 @Injectable()
 export class AnalysisService {
-
-  private chess = new Chess();
-
   constructor(
     private readonly chessService: ChessService,
     private readonly engineService: EngineService,
     private readonly openingsService: OpeningsService,
   ) { }
 
-  /**
-   * Orquesta el flujo completo del análisis de una partida.
-   * @param pgn El PGN de la partida.
-   * @param depth La profundidad del análisis.
-   * @returns Un reporte con la precisión y clasificación de movimientos.
-   */
   async analyzeGame(pgn: string, depth: number): Promise<Report> {
-    try {
-      // Paso 1: Validar el PGN
-      this.validatePgn(pgn);
+    this.validatePgn(pgn);
+    const positions = this.chessService.parsePgn(pgn);
 
-      // Paso 2: Parsear el PGN a posiciones.
-      const positions: Position[] = this.chessService.parsePgn(pgn);
-      if (!positions || positions.length === 0) {
-        throw new Error('No se encontraron posiciones en el PGN proporcionado.');
-      }
-
-      // Paso 3: Analizar cada posición y clasificar movimientos.
-      const evaluatedPositions = await this.classifyAndSuggest(positions, depth);
-
-      // Paso 4: Calcular la precisión total.
-      const accuracy = this.chessService.calculateAccuracy(
-        evaluatedPositions.map((pos) => pos.classification),
-      );
-
-      // Paso 5: Generar el reporte final.
-      return this.chessService.formatAnalysisReport(evaluatedPositions, accuracy);
-    } catch (error) {
-      console.error('Error durante el análisis de la partida:', error.message);
-      throw new Error('Falló el análisis de la partida. Por favor, revisa el PGN y los parámetros.');
-    }
-  }
-
-  /**
-   * Valida que un PGN sea válido.
-   */
-  validatePgn(pgn: string): boolean {
-    try {
-      const testChess = new Chess();
-      testChess.loadPgn(pgn);
-      if (testChess.history().length === 0) {
-        throw new BadRequestException('El PGN proporcionado no contiene movimientos válidos.');
-      }
-      return true;
-    } catch (error) {
-      throw new BadRequestException('El PGN proporcionado no es válido: ' + error.message);
-    }
-  }
-
-  /**
-   * Get evaluation value in centipawns (normalized for comparison)
-   */
-  private getEvalInCentipawns(evaluation: { type: 'cp' | 'mate'; value: number }, isWhiteTurn: boolean): number {
-    if (evaluation.type === 'mate') {
-      // Mate in N moves: use large value
-      const mateValue = evaluation.value > 0 ? 10000 - evaluation.value * 10 : -10000 - evaluation.value * 10;
-      return isWhiteTurn ? mateValue : -mateValue;
-    }
-    // Normalize: positive = good for the player who just moved
-    return isWhiteTurn ? evaluation.value : -evaluation.value;
-  }
-
-  /**
-   * Clasifica los movimientos y sugiere las mejores jugadas basándose en el motor.
-   */
-  private async classifyAndSuggest(
-    positions: Position[],
-    depth: number,
-  ): Promise<EvaluatedPosition[]> {
+    const whiteAccuracies: number[] = [];
+    const blackAccuracies: number[] = [];
     const evaluatedPositions: EvaluatedPosition[] = [];
 
+    const tempChess = new Chess();
+    let previousFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
     for (const [index, position] of positions.entries()) {
-      try {
-        // Check if this is a book move (opening position)
-        const openingName = this.openingsService.getOpeningName(position.fen);
-        const isBookMove = openingName !== null || this.openingsService.isOpeningPhase(index + 1);
+      tempChess.load(previousFen);
+      const isWhiteTurn = tempChess.turn() === 'w';
 
-        // For very early moves (first 5), just mark as book if in opening database
-        if (index < 10 && openingName !== null) {
-          evaluatedPositions.push({
-            ...position,
-            evaluation: { type: 'cp', value: 0 },
-            classification: 'book',
-            suggestedMove: { san: '', uci: '' },
-          });
-          continue;
-        }
-
-        const engineLines = await this.engineService.evaluatePosition(position.fen, depth);
-
-        // Handle case when no lines returned
-        if (!engineLines || engineLines.length === 0) {
-          console.warn(`No se encontraron líneas para la posición: ${position.fen}`);
-          evaluatedPositions.push({
-            ...position,
-            evaluation: { type: 'cp', value: 0 },
-            classification: isBookMove ? 'book' : 'excellent',
-            suggestedMove: { san: '', uci: '' },
-          });
-          continue;
-        }
-
-        const bestLine = engineLines[0];
-        const isWhiteTurn = index % 2 === 0; // White plays on even indices (0, 2, 4...)
-
-        // Get current position evaluation
-        const currentEval = this.getEvalInCentipawns(bestLine.evaluation, isWhiteTurn);
-
-        // Get previous position evaluation
-        let previousEval = 0;
-        let evaluationDelta = 0;
-
-        if (index > 0 && evaluatedPositions[index - 1]?.evaluation) {
-          const prevEvalRaw = evaluatedPositions[index - 1].evaluation;
-          previousEval = this.getEvalInCentipawns(prevEvalRaw, !isWhiteTurn);
-
-          // Delta: how much the position changed
-          // Positive delta = position got worse for the moving player
-          // Negative delta = position got better for the moving player
-          evaluationDelta = previousEval - currentEval;
-        }
-
-        // Check if the played move matches the engine's suggested best move
-        const isBestMove = bestLine.moveUCI && position.move?.uci === bestLine.moveUCI;
-
-        // Classify the move
-        let classification: Classification;
-
-        if (isBookMove && openingName !== null) {
-          classification = 'book';
-        } else {
-          classification = this.chessService.classifyMove(
-            evaluationDelta,
-            previousEval,
-            currentEval,
-            isBestMove
-          );
-        }
-
-        // Get suggested move
-        let suggestedMove = { san: '', uci: '' };
-        try {
-          if (bestLine.moveUCI) {
-            suggestedMove = this.engineService.getSuggestedMove(engineLines, position.fen);
-          }
-        } catch {
-          // Terminal position or no valid moves
-        }
-
-        evaluatedPositions.push({
-          ...position,
-          evaluation: bestLine.evaluation,
-          classification,
-          suggestedMove
-        });
-      } catch (error) {
-        console.error(`Error al analizar la posición ${position.fen}:`, error.message);
+      // 1. Detección de Libro (Solo para primeros movimientos en base de datos)
+      const openingName = this.openingsService.getOpeningName(previousFen);
+      if (openingName && index < 20) {
         evaluatedPositions.push({
           ...position,
           evaluation: { type: 'cp', value: 0 },
-          classification: 'excellent', // Default to excellent instead of book
-          suggestedMove: { san: '', uci: '' },
+          classification: 'book',
+          suggestedMove: { san: '', uci: '' }
         });
+        if (isWhiteTurn) whiteAccuracies.push(100);
+        else blackAccuracies.push(100);
+        previousFen = position.fen;
+        continue;
       }
+
+      // 2. Evaluar la posición ANTERIOR para saber cuál era el mejor movimiento
+      const engineResult = await this.engineService.evaluatePosition(previousFen, depth);
+
+      if (!engineResult || engineResult.length === 0) {
+        evaluatedPositions.push({
+          ...position,
+          evaluation: { type: 'cp', value: 0 },
+          classification: 'forced',
+          suggestedMove: { san: '', uci: '' }
+        });
+        previousFen = position.fen;
+        continue;
+      }
+
+      const bestLine = engineResult[0];
+      const bestMoveUci = bestLine.moveUCI;
+      const userMoveUci = position.move.uci;
+
+      // Normalizar UCIs para comparación (eliminar promociones vacías, lowercase)
+      const normalizeUci = (uci: string) => uci.toLowerCase().replace(/undefined|null/g, '');
+      const isBestMove = normalizeUci(userMoveUci) === normalizeUci(bestMoveUci);
+
+      // Evaluación de la posición si se jugara la MEJOR jugada
+      const bestEvalCp = this.normalizeEval(bestLine.evaluation, isWhiteTurn);
+
+      // 3. Si NO es la mejor jugada, evaluar la posición resultante
+      let userEvalCp = bestEvalCp;
+
+      if (!isBestMove) {
+        // Evaluar la posición después del movimiento del usuario
+        const userPosEval = await this.engineService.evaluatePosition(position.fen, Math.min(depth, 12));
+
+        if (userPosEval && userPosEval.length > 0) {
+          // IMPORTANTE: La evaluación es desde la perspectiva del SIGUIENTE jugador
+          // Por eso invertimos el signo
+          userEvalCp = -this.normalizeEval(userPosEval[0].evaluation, !isWhiteTurn);
+        } else {
+          // Si no hay evaluación (mate, etc), asumimos pérdida grande
+          userEvalCp = isWhiteTurn ? -3000 : 3000;
+        }
+      }
+
+      // 4. Calcular pérdida en centipawns
+      // Desde la perspectiva del jugador que movió
+      // Si es blanco: quiere maximizar (bestEvalCp > userEvalCp = malo)
+      // Si es negro: quiere minimizar (bestEvalCp < userEvalCp = malo)
+      let cpLoss: number;
+      if (isWhiteTurn) {
+        cpLoss = bestEvalCp - userEvalCp;
+      } else {
+        cpLoss = userEvalCp - bestEvalCp;
+      }
+
+      cpLoss = Math.max(0, cpLoss); // No puede ser negativa
+
+      // Debug
+      console.log(`[Move ${index + 1}] ${position.move.san} | Best: ${bestMoveUci} | User: ${userMoveUci} | isBest: ${isBestMove} | BestEval: ${bestEvalCp} | UserEval: ${userEvalCp} | Loss: ${cpLoss}cp`);
+
+      // 5. Calcular precisión del movimiento
+      const probabilityLoss = EvaluationUtils.getProbabilityLoss(bestEvalCp, userEvalCp, isWhiteTurn);
+      const moveAccuracy = EvaluationUtils.getMoveAccuracy(probabilityLoss);
+
+      if (isWhiteTurn) whiteAccuracies.push(moveAccuracy);
+      else blackAccuracies.push(moveAccuracy);
+
+      // 6. Clasificar el movimiento
+      let classification = this.chessService.classifyMove(cpLoss, isBestMove);
+
+      // 7. Lógica de "Brillante" (Best + Sacrificio + No estaba ganado)
+      if (classification === 'best') {
+        const isMaterialDown = this.hasMaterialSacrifice(previousFen, position.fen, isWhiteTurn);
+        if (isMaterialDown && Math.abs(bestEvalCp) < 500) {
+          classification = 'brilliant';
+        }
+      }
+
+      // 8. Guardar resultado
+      evaluatedPositions.push({
+        ...position,
+        evaluation: bestLine.evaluation,
+        classification: classification,
+        suggestedMove: { san: '', uci: bestMoveUci }
+      });
+
+      previousFen = position.fen;
     }
 
-    return evaluatedPositions;
+    // 9. Generar Reporte Final
+    const whiteGameAccuracy = this.chessService.calculateGameAccuracy(whiteAccuracies);
+    const blackGameAccuracy = this.chessService.calculateGameAccuracy(blackAccuracies);
+
+    return this.chessService.formatAnalysisReport(
+      evaluatedPositions,
+      whiteGameAccuracy,
+      blackGameAccuracy
+    );
+  }
+
+  /**
+   * Normaliza evaluaciones a centipawns con perspectiva correcta
+   */
+  private normalizeEval(evalObj: { type: 'cp' | 'mate'; value: number }, isWhiteToMove: boolean): number {
+    let cp: number;
+
+    if (evalObj.type === 'mate') {
+      const sign = Math.sign(evalObj.value);
+      // Mate en 1 (10000) vale más que Mate en 5 (9900)
+      cp = sign * (10000 - Math.abs(evalObj.value) * 20);
+    } else {
+      cp = evalObj.value;
+    }
+
+    // Stockfish siempre reporta desde perspectiva de blanco
+    // No necesitamos invertir aquí, lo haremos en el cálculo de pérdida
+    return cp;
+  }
+
+  /**
+   * Detecta si hubo sacrificio de material
+   */
+  private hasMaterialSacrifice(prevFen: string, currFen: string, isWhiteTurn: boolean): boolean {
+    const prevMat = this.getMaterialCount(prevFen);
+    const currMat = this.getMaterialCount(currFen);
+
+    if (isWhiteTurn) {
+      return currMat.white < prevMat.white;
+    } else {
+      return currMat.black < prevMat.black;
+    }
+  }
+
+  /**
+   * Cuenta material por color
+   */
+  private getMaterialCount(fen: string) {
+    const pieces = fen.split(' ')[0];
+    let white = 0, black = 0;
+    const values: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+    for (const char of pieces) {
+      const lower = char.toLowerCase();
+      if (values[lower] !== undefined) {
+        const val = values[lower];
+        if (char === char.toUpperCase()) white += val;
+        else black += val;
+      }
+    }
+    return { white, black };
+  }
+
+  validatePgn(pgn: string): boolean {
+    try {
+      const tempChess = new Chess();
+      tempChess.loadPgn(pgn);
+      if (tempChess.history().length === 0) throw new Error();
+      return true;
+    } catch {
+      throw new BadRequestException('PGN inválido o sin movimientos.');
+    }
   }
 }
