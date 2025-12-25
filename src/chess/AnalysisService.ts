@@ -62,55 +62,73 @@ export class AnalysisService {
       const bestMoveUci = bestLine.moveUCI;
       const userMoveUci = position.move.uci;
 
-      // Convert best move UCI to SAN for display
+      // Convert best move UCI to SAN for display (with error handling)
       const bestMoveSan = this.uciToSan(previousFen, bestMoveUci);
 
       // Normalizar UCIs para comparación (eliminar promociones vacías, lowercase)
       const normalizeUci = (uci: string) => uci.toLowerCase().replace(/undefined|null/g, '');
       const isBestMove = normalizeUci(userMoveUci) === normalizeUci(bestMoveUci);
 
-      // Get evaluation AFTER the best move would be played (from engine analysis)
-      // This is always from WHITE's perspective
-      const bestEvalCp = this.evalToCP(bestLine.evaluation);
+      // ============================================================
+      // EVALUATION PERSPECTIVE - CRITICAL UNDERSTANDING
+      // ============================================================
+      // Stockfish ALWAYS returns evaluation from the perspective of the
+      // side TO MOVE in the given FEN position.
+      // 
+      // When we evaluate previousFen (before the move):
+      // - If it's White's turn, eval is from White's perspective
+      // - If it's Black's turn, eval is from Black's perspective
+      // 
+      // We want all evaluations in WHITE's perspective for consistency.
+      // ============================================================
+
+      // Best eval is from previousFen, which has the current player to move
+      // Convert to WHITE's perspective
+      const bestEvalFromEngine = this.evalToCP(bestLine.evaluation);
+      const bestEvalWhitePerspective = isWhiteTurn ? bestEvalFromEngine : -bestEvalFromEngine;
 
       // 3. Si NO es la mejor jugada, evaluar la posición resultante
-      let userEvalCp = bestEvalCp;
+      let userEvalWhitePerspective = bestEvalWhitePerspective;
 
       if (!isBestMove) {
-        // Evaluar la posición después del movimiento del usuario
+        // Evaluar la posición después del movimiento del usuario (position.fen)
+        // In position.fen, it's the OPPONENT's turn to move
         const userPosEval = await this.engineService.evaluatePosition(position.fen, Math.min(depth, 12));
 
         if (userPosEval && userPosEval.length > 0) {
-          // The eval for position.fen is from the NEXT player's perspective
-          // So we need to negate it to get the perspective of the player who just moved
-          userEvalCp = -this.evalToCP(userPosEval[0].evaluation);
+          // The eval is from the OPPONENT's perspective (next player to move)
+          // So we need to negate it to get WHITE's perspective
+          const evalFromOpponentPerspective = this.evalToCP(userPosEval[0].evaluation);
+          // After White moves, it's Black's turn - so eval is from Black's perspective -> negate for White
+          // After Black moves, it's White's turn - so eval is from White's perspective -> keep as is
+          userEvalWhitePerspective = isWhiteTurn ? -evalFromOpponentPerspective : evalFromOpponentPerspective;
         } else {
           // Si no hay evaluación (mate, etc), asumimos pérdida grande
-          userEvalCp = isWhiteTurn ? -3000 : 3000;
+          userEvalWhitePerspective = isWhiteTurn ? -3000 : 3000;
         }
       }
 
       // 4. Calcular pérdida en centipawns
-      // bestEvalCp = evaluation after best move (from WHITE's perspective)
-      // userEvalCp = evaluation after user's move (from WHITE's perspective)
-      // 
-      // For White: higher = better, so loss = bestEvalCp - userEvalCp
-      // For Black: lower = better, so loss = userEvalCp - bestEvalCp
+      // Both evaluations are now in WHITE's perspective
+      // For White: higher = better, so loss = best - user (if positive, it's a loss)
+      // For Black: lower = better, so loss = user - best (if positive, it's a loss for Black)
       let cpLoss: number;
       if (isWhiteTurn) {
-        cpLoss = bestEvalCp - userEvalCp;
+        cpLoss = bestEvalWhitePerspective - userEvalWhitePerspective;
       } else {
-        cpLoss = userEvalCp - bestEvalCp;
+        // For Black: they want LOWER values (more negative from White's perspective)
+        // So a loss is when user's eval is HIGHER (less negative) than best eval
+        cpLoss = userEvalWhitePerspective - bestEvalWhitePerspective;
       }
 
       // Loss should never be negative (user can't play better than engine's best)
       cpLoss = Math.max(0, cpLoss);
 
       // Debug
-      console.log(`[Move ${index + 1}] ${position.move.san} | isWhite: ${isWhiteTurn} | Best: ${bestMoveUci} | User: ${userMoveUci} | isBest: ${isBestMove} | BestEval: ${bestEvalCp}cp | UserEval: ${userEvalCp}cp | Loss: ${cpLoss}cp`);
+      console.log(`[Move ${index + 1}] ${position.move.san} | isWhite: ${isWhiteTurn} | Best: ${bestMoveUci} | User: ${userMoveUci} | isBest: ${isBestMove} | BestEval(W): ${bestEvalWhitePerspective}cp | UserEval(W): ${userEvalWhitePerspective}cp | Loss: ${cpLoss}cp`);
 
       // 5. Calcular precisión del movimiento
-      const probabilityLoss = EvaluationUtils.getProbabilityLoss(bestEvalCp, userEvalCp, isWhiteTurn);
+      const probabilityLoss = EvaluationUtils.getProbabilityLoss(bestEvalWhitePerspective, userEvalWhitePerspective, isWhiteTurn);
       const moveAccuracy = EvaluationUtils.getMoveAccuracy(probabilityLoss);
 
       if (isWhiteTurn) whiteAccuracies.push(moveAccuracy);
@@ -122,7 +140,7 @@ export class AnalysisService {
       // 7. Lógica de "Brillante" (Best + Sacrificio + No estaba ganado)
       if (classification === 'best') {
         const isMaterialDown = this.hasMaterialSacrifice(previousFen, position.fen, isWhiteTurn);
-        if (isMaterialDown && Math.abs(bestEvalCp) < 500) {
+        if (isMaterialDown && Math.abs(bestEvalWhitePerspective) < 500) {
           classification = 'brilliant';
         }
       }
@@ -150,7 +168,7 @@ export class AnalysisService {
   }
 
   /**
-   * Converts evaluation object to centipawns (always from WHITE's perspective)
+   * Converts evaluation object to centipawns (from side-to-move perspective)
    */
   private evalToCP(evalObj: { type: 'cp' | 'mate'; value: number }): number {
     if (evalObj.type === 'mate') {
@@ -221,7 +239,7 @@ export class AnalysisService {
       return move ? move.san : '';
     } catch (e) {
       console.error(`Error converting UCI to SAN: ${uci}`, e);
-      return '';
+      return uci; // Return UCI as fallback instead of empty string
     }
   }
 }
