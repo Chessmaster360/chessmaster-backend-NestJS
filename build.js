@@ -38,54 +38,64 @@ async function downloadFile(url, destPath) {
 }
 
 async function setupLinuxStockfish(destPath) {
-  const tarPath = path.join(destPath, 'stockfish.tar');
+  const tempDir = path.join(destPath, '_temp_stockfish');
+  const tarPath = path.join(tempDir, 'stockfish.tar');
+  const finalBinaryPath = path.join(destPath, 'stockfish');
 
   try {
+    // Create temp directory
+    fs.ensureDirSync(tempDir);
+
     // Download the tar file
     await downloadFile(STOCKFISH_LINUX_URL, tarPath);
 
-    // Extract the tar file
+    // Extract the tar file to temp directory
     console.log('📦 Extracting Stockfish...');
-    execSync(`tar -xf stockfish.tar`, { cwd: destPath });
+    execSync(`tar -xf stockfish.tar`, { cwd: tempDir });
 
-    // Find and move the binary
-    const extractedDir = path.join(destPath, `stockfish`);
-    const binaryPath = path.join(extractedDir, 'stockfish-ubuntu-x86-64-avx2');
-    const finalPath = path.join(destPath, 'stockfish');
+    // Find the binary recursively
+    console.log('🔍 Searching for Stockfish binary...');
+    let foundBinary = null;
 
-    if (fs.existsSync(binaryPath)) {
-      fs.copyFileSync(binaryPath, finalPath);
-      fs.chmodSync(finalPath, 0o755);
-      console.log('✅ Stockfish Linux binary ready');
-    } else {
-      // Try alternative path structure
-      const files = fs.readdirSync(destPath);
-      console.log('📁 Files in dest:', files);
-
-      for (const file of files) {
-        const fullPath = path.join(destPath, file);
-        if (fs.statSync(fullPath).isDirectory()) {
-          const innerFiles = fs.readdirSync(fullPath);
-          for (const inner of innerFiles) {
-            if (inner.includes('stockfish') && !inner.includes('.')) {
-              const srcBin = path.join(fullPath, inner);
-              fs.copyFileSync(srcBin, finalPath);
-              fs.chmodSync(finalPath, 0o755);
-              console.log(`✅ Found and copied: ${inner}`);
-              break;
-            }
-          }
+    function findBinary(dir) {
+      const items = fs.readdirSync(dir);
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          findBinary(fullPath);
+        } else if (item.includes('stockfish') && item.includes('ubuntu') && !item.endsWith('.tar')) {
+          foundBinary = fullPath;
+          console.log(`✅ Found binary: ${fullPath}`);
         }
       }
     }
 
-    // Cleanup
-    fs.removeSync(tarPath);
-    if (fs.existsSync(extractedDir)) {
-      fs.removeSync(extractedDir);
+    findBinary(tempDir);
+
+    if (!foundBinary) {
+      throw new Error('Could not find Stockfish binary in extracted files');
     }
 
+    // Remove existing stockfish directory/file if it exists
+    if (fs.existsSync(finalBinaryPath)) {
+      fs.removeSync(finalBinaryPath);
+    }
+
+    // Copy the binary
+    fs.copyFileSync(foundBinary, finalBinaryPath);
+    fs.chmodSync(finalBinaryPath, 0o755);
+    console.log(`✅ Stockfish binary installed to: ${finalBinaryPath}`);
+
+    // Cleanup temp directory
+    fs.removeSync(tempDir);
+    console.log('🧹 Cleaned up temp files');
+
   } catch (error) {
+    // Cleanup on error
+    if (fs.existsSync(tempDir)) {
+      fs.removeSync(tempDir);
+    }
     console.error('❌ Error setting up Linux Stockfish:', error.message);
     throw error;
   }
@@ -111,16 +121,13 @@ async function build() {
       try {
         // Copy all stockfish files
         fs.ensureDirSync(destPath);
-        fs.copySync(srcPath, destPath);
+        fs.copySync(srcPath, destPath, { overwrite: true });
         console.log('✅ Stockfish files copied.');
 
         // On Linux, download the Linux binary
         if (!isWindows) {
-          const linuxBinaryPath = path.join(destPath, 'stockfish');
-          if (!fs.existsSync(linuxBinaryPath)) {
-            console.log('🐧 Linux detected, downloading Stockfish binary...');
-            await setupLinuxStockfish(destPath);
-          }
+          console.log('🐧 Linux detected, downloading Stockfish binary...');
+          await setupLinuxStockfish(destPath);
         }
 
         console.log('✅ Build completed successfully.');
