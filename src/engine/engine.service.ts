@@ -275,9 +275,17 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       await this.initEngine();
     }
 
-    // Clear previous messages
+    // CRITICAL: Reset engine state for new position
+    // This prevents contamination from previous position analysis
     this.currentMessages = [];
     this.currentDepth = 0;
+
+    await this.sendCommand('ucinewgame');
+    await this.sendCommand('isready');
+    await this.waitForMessage('readyok', 5000);
+
+    // Clear messages again after sync (readyok message cleanup)
+    this.currentMessages = [];
 
     // Set position and start analysis
     await this.sendCommand(`position fen ${fen}`);
@@ -297,11 +305,13 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
           // Small delay for final results
           await new Promise(r => setTimeout(r, 200));
           const partialResults = this.parseAnalysisResults();
-          if (this.pendingResolve) {
-            this.pendingResolve(partialResults);
-            this.pendingResolve = null;
-          }
+          const resolve = this.pendingResolve;
+          // CRITICAL: Clear state BEFORE resolving to prevent race conditions
+          this.pendingResolve = null;
           this.currentMessages = [];
+          if (resolve) {
+            resolve(partialResults);
+          }
         }
       }, timeoutMs);
     });
