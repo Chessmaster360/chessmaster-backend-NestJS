@@ -62,12 +62,16 @@ export class AnalysisService {
       const bestMoveUci = bestLine.moveUCI;
       const userMoveUci = position.move.uci;
 
+      // Convert best move UCI to SAN for display
+      const bestMoveSan = this.uciToSan(previousFen, bestMoveUci);
+
       // Normalizar UCIs para comparación (eliminar promociones vacías, lowercase)
       const normalizeUci = (uci: string) => uci.toLowerCase().replace(/undefined|null/g, '');
       const isBestMove = normalizeUci(userMoveUci) === normalizeUci(bestMoveUci);
 
-      // Evaluación de la posición si se jugara la MEJOR jugada
-      const bestEvalCp = this.normalizeEval(bestLine.evaluation, isWhiteTurn);
+      // Get evaluation AFTER the best move would be played (from engine analysis)
+      // This is always from WHITE's perspective
+      const bestEvalCp = this.evalToCP(bestLine.evaluation);
 
       // 3. Si NO es la mejor jugada, evaluar la posición resultante
       let userEvalCp = bestEvalCp;
@@ -77,9 +81,9 @@ export class AnalysisService {
         const userPosEval = await this.engineService.evaluatePosition(position.fen, Math.min(depth, 12));
 
         if (userPosEval && userPosEval.length > 0) {
-          // IMPORTANTE: La evaluación es desde la perspectiva del SIGUIENTE jugador
-          // Por eso invertimos el signo
-          userEvalCp = -this.normalizeEval(userPosEval[0].evaluation, !isWhiteTurn);
+          // The eval for position.fen is from the NEXT player's perspective
+          // So we need to negate it to get the perspective of the player who just moved
+          userEvalCp = -this.evalToCP(userPosEval[0].evaluation);
         } else {
           // Si no hay evaluación (mate, etc), asumimos pérdida grande
           userEvalCp = isWhiteTurn ? -3000 : 3000;
@@ -87,9 +91,11 @@ export class AnalysisService {
       }
 
       // 4. Calcular pérdida en centipawns
-      // Desde la perspectiva del jugador que movió
-      // Si es blanco: quiere maximizar (bestEvalCp > userEvalCp = malo)
-      // Si es negro: quiere minimizar (bestEvalCp < userEvalCp = malo)
+      // bestEvalCp = evaluation after best move (from WHITE's perspective)
+      // userEvalCp = evaluation after user's move (from WHITE's perspective)
+      // 
+      // For White: higher = better, so loss = bestEvalCp - userEvalCp
+      // For Black: lower = better, so loss = userEvalCp - bestEvalCp
       let cpLoss: number;
       if (isWhiteTurn) {
         cpLoss = bestEvalCp - userEvalCp;
@@ -97,10 +103,11 @@ export class AnalysisService {
         cpLoss = userEvalCp - bestEvalCp;
       }
 
-      cpLoss = Math.max(0, cpLoss); // No puede ser negativa
+      // Loss should never be negative (user can't play better than engine's best)
+      cpLoss = Math.max(0, cpLoss);
 
       // Debug
-      console.log(`[Move ${index + 1}] ${position.move.san} | Best: ${bestMoveUci} | User: ${userMoveUci} | isBest: ${isBestMove} | BestEval: ${bestEvalCp} | UserEval: ${userEvalCp} | Loss: ${cpLoss}cp`);
+      console.log(`[Move ${index + 1}] ${position.move.san} | isWhite: ${isWhiteTurn} | Best: ${bestMoveUci} | User: ${userMoveUci} | isBest: ${isBestMove} | BestEval: ${bestEvalCp}cp | UserEval: ${userEvalCp}cp | Loss: ${cpLoss}cp`);
 
       // 5. Calcular precisión del movimiento
       const probabilityLoss = EvaluationUtils.getProbabilityLoss(bestEvalCp, userEvalCp, isWhiteTurn);
@@ -125,7 +132,7 @@ export class AnalysisService {
         ...position,
         evaluation: bestLine.evaluation,
         classification: classification,
-        suggestedMove: { san: '', uci: bestMoveUci }
+        suggestedMove: { san: bestMoveSan, uci: bestMoveUci }
       });
 
       previousFen = position.fen;
@@ -143,22 +150,15 @@ export class AnalysisService {
   }
 
   /**
-   * Normaliza evaluaciones a centipawns con perspectiva correcta
+   * Converts evaluation object to centipawns (always from WHITE's perspective)
    */
-  private normalizeEval(evalObj: { type: 'cp' | 'mate'; value: number }, isWhiteToMove: boolean): number {
-    let cp: number;
-
+  private evalToCP(evalObj: { type: 'cp' | 'mate'; value: number }): number {
     if (evalObj.type === 'mate') {
       const sign = Math.sign(evalObj.value);
-      // Mate en 1 (10000) vale más que Mate en 5 (9900)
-      cp = sign * (10000 - Math.abs(evalObj.value) * 20);
-    } else {
-      cp = evalObj.value;
+      // Mate in 1 (10000) > Mate in 5 (9900)
+      return sign * (10000 - Math.abs(evalObj.value) * 20);
     }
-
-    // Stockfish siempre reporta desde perspectiva de blanco
-    // No necesitamos invertir aquí, lo haremos en el cálculo de pérdida
-    return cp;
+    return evalObj.value;
   }
 
   /**
@@ -202,6 +202,26 @@ export class AnalysisService {
       return true;
     } catch {
       throw new BadRequestException('PGN inválido o sin movimientos.');
+    }
+  }
+
+  /**
+   * Converts UCI notation to SAN notation
+   */
+  private uciToSan(fen: string, uci: string): string {
+    if (!uci || uci.length < 4) return '';
+
+    try {
+      const tempChess = new Chess(fen);
+      const from = uci.substring(0, 2);
+      const to = uci.substring(2, 4);
+      const promotion = uci.length > 4 ? uci[4] : undefined;
+
+      const move = tempChess.move({ from, to, promotion });
+      return move ? move.san : '';
+    } catch (e) {
+      console.error(`Error converting UCI to SAN: ${uci}`, e);
+      return '';
     }
   }
 }

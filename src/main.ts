@@ -31,12 +31,13 @@ async function bootstrap() {
     // Establece un prefijo global para las rutas
     app.setGlobalPrefix('api');
 
-    // Configuración de CORS
+    // Configuración de CORS - usando variable de entorno
+    const corsOrigins = process.env.CORS_ORIGINS
+      ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+      : ['http://localhost:5173'];
+
     app.enableCors({
-      origin: [
-        'http://localhost:5173',
-        'https://chessmaster360.netlify.app', // URL de producción
-      ],
+      origin: corsOrigins,
       methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
       credentials: true,
     });
