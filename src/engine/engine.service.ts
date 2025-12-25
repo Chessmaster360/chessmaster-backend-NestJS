@@ -275,16 +275,21 @@ export class EngineService implements OnModuleInit, OnModuleDestroy {
       await this.initEngine();
     }
 
-    // CRITICAL: Reset engine state for new position
-    // This prevents contamination from previous position analysis
+    // CRITICAL: Clear state BEFORE sending new position
     this.currentMessages = [];
     this.currentDepth = 0;
+    this.pendingResolve = null;
 
-    await this.sendCommand('ucinewgame');
-    await this.sendCommand('isready');
-    await this.waitForMessage('readyok', 5000);
+    try {
+      // Sync with engine before each position (without ucinewgame which is slow)
+      await this.sendCommand('isready');
+      await this.waitForReady(10000);
+    } catch (error) {
+      console.error('Engine sync timeout, restarting...', error.message);
+      await this.restartEngine();
+    }
 
-    // Clear messages again after sync (readyok message cleanup)
+    // Clear messages again after sync
     this.currentMessages = [];
 
     // Set position and start analysis
